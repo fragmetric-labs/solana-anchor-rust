@@ -12,7 +12,7 @@
 //!
 //! This will generate a fully functional Rust CPI client for your IDL.
 //!
-//! More examples can be found in the [examples/](https://github.com/saber-hq/anchor-gen/tree/master/examples) directory.
+//! More examples can be found in the [examples/](https://github.com/fragmetric-labs/solana-anchor-rust/tree/master/examples) directory.
 
 use anchor_idl::GeneratorOptions;
 use darling::FromMeta;

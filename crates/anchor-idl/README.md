@@ -2,7 +2,7 @@
 
 Generates an Anchor CPI crate from a JSON IDL.
 
-This is a component of [anchor-gen](https://github.com/saber-hq/anchor-gen).
+This is a component of [anchor-gen](https://github.com/fragmetric-labs/solana-anchor-rust).
 
 ## License
 

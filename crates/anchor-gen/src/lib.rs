@@ -12,7 +12,7 @@
 //!
 //! This will generate a fully functional Rust CPI client for your IDL.
 //!
-//! More examples can be found in the [examples/](https://github.com/saber-hq/anchor-gen/tree/master/examples) directory.
+//! More examples can be found in the [examples/](https://github.com/fragmetric-labs/solana-anchor-rust/tree/master/examples) directory.
 
 pub use anchor_generate_cpi_crate::generate_cpi_crate;
 pub use anchor_generate_cpi_interface::generate_cpi_interface;
