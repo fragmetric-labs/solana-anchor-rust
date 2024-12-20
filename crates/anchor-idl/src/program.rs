@@ -36,7 +36,7 @@ impl GeneratorOptions {
         let cargo_manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
         let path = PathBuf::from(cargo_manifest_dir).join(&self.idl_path);
         let idl_contents = fs::read_to_string(&path).unwrap();
-        let idl: anchor_syn::idl::Idl = serde_json::from_str(&idl_contents).unwrap();
+        let idl: anchor_lang_idl_spec::Idl = serde_json::from_str(&idl_contents).unwrap();
 
         let zero_copy = path_list_to_string(self.zero_copy.as_ref());
         let packed = path_list_to_string(self.packed.as_ref());
@@ -64,14 +64,14 @@ pub struct StructOpts {
 }
 
 pub struct Generator {
-    pub idl: anchor_syn::idl::Idl,
+    pub idl: anchor_lang_idl_spec::Idl,
     pub struct_opts: BTreeMap<String, StructOpts>,
 }
 
 impl Generator {
     pub fn generate_cpi_interface(&self) -> TokenStream {
         let idl = &self.idl;
-        let program_name: Ident = format_ident!("{}", idl.name);
+        let _program_name: Ident = format_ident!("{}", idl.metadata.name);
 
         let accounts = generate_accounts(&idl.types, &idl.accounts, &self.struct_opts);
         let typedefs = generate_typedefs(&idl.types, &self.struct_opts);
@@ -80,40 +80,38 @@ impl Generator {
 
         let docs = format!(
         " Anchor CPI crate generated from {} v{} using [anchor-gen](https://crates.io/crates/anchor-gen) v{}.",
-        &idl.name,
-        &idl.version,
+        &idl.metadata.name,
+        &idl.metadata.version,
         &GEN_VERSION.unwrap_or("unknown")
-    );
+        );
 
         quote! {
             use anchor_lang::prelude::*;
+            use typedef::*;
+            use account::*;
+            use context::*;
 
-            pub mod typedefs {
+            pub mod typedef {
                 //! User-defined types.
                 use super::*;
                 #typedefs
             }
 
-            pub mod state {
+            pub mod account {
                 //! Structs of accounts which hold state.
                 use super::*;
                 #accounts
             }
 
-            pub mod ix_accounts {
+            pub mod context {
                 //! Accounts used in instructions.
                 use super::*;
                 #ix_structs
             }
 
-            use ix_accounts::*;
-            pub use state::*;
-            pub use typedefs::*;
-
-            #[program]
-            pub mod #program_name {
+            #[anchor_lang::program]
+            pub mod client {
                 #![doc = #docs]
-
                 use super::*;
                 #ix_handlers
             }

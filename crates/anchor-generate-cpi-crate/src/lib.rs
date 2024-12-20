@@ -45,5 +45,7 @@ pub fn generate_cpi_crate(input: proc_macro::TokenStream) -> proc_macro::TokenSt
         idl_path: id_literal.value(),
         ..Default::default()
     };
-    opts.to_generator().generate_cpi_interface().into()
+    let result = opts.to_generator().generate_cpi_interface();
+    // println!("{}", result.to_string());
+    result.into()
 }

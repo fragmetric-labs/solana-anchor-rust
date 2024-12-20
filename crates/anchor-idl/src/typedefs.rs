@@ -1,10 +1,8 @@
 use std::collections::BTreeMap;
-
-use anchor_syn::idl::{EnumFields, IdlEnumVariant, IdlField, IdlType, IdlTypeDefinition};
+use anchor_lang_idl_spec::{IdlArrayLen, IdlDefinedFields, IdlEnumVariant, IdlField, IdlType, IdlTypeDef, IdlTypeDefTy};
 use heck::ToSnakeCase;
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
-
 use crate::StructOpts;
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -13,8 +11,25 @@ pub struct FieldListProperties {
     pub can_derive_default: bool,
 }
 
+pub fn get_defined_fields_list_properties(
+    defs: &[IdlTypeDef],
+    fields: &Option<IdlDefinedFields>
+) -> FieldListProperties {
+    let types = fields.iter().flat_map(|f| {
+        match f {
+            IdlDefinedFields::Named(ff) => {
+                ff.iter().map(|fff| fff.ty.clone()).collect::<Vec<_>>()
+            }
+            IdlDefinedFields::Tuple(ff) => {
+                ff.clone()
+            }
+        }
+    }).collect::<Vec<_>>();
+    get_type_list_properties(defs, &*types)
+}
+
 pub fn get_field_list_properties(
-    defs: &[IdlTypeDefinition],
+    defs: &[IdlTypeDef],
     fields: &[IdlField],
 ) -> FieldListProperties {
     get_type_list_properties(
@@ -24,7 +39,7 @@ pub fn get_field_list_properties(
 }
 
 pub fn get_type_list_properties(
-    defs: &[IdlTypeDefinition],
+    defs: &[IdlTypeDef],
     fields: &[IdlType],
 ) -> FieldListProperties {
     fields.iter().fold(
@@ -45,7 +60,7 @@ pub fn get_type_list_properties(
 }
 
 pub fn get_variant_list_properties(
-    defs: &[IdlTypeDefinition],
+    defs: &[IdlTypeDef],
     variants: &[IdlEnumVariant],
 ) -> FieldListProperties {
     variants.iter().fold(
@@ -55,8 +70,8 @@ pub fn get_variant_list_properties(
         },
         |acc, el| {
             let props = match &el.fields {
-                Some(EnumFields::Named(fields)) => get_field_list_properties(defs, fields),
-                Some(EnumFields::Tuple(fields)) => get_type_list_properties(defs, fields),
+                Some(IdlDefinedFields::Named(fields)) => get_field_list_properties(defs, fields),
+                Some(IdlDefinedFields::Tuple(fields)) => get_type_list_properties(defs, fields),
                 None => acc,
             };
             FieldListProperties {
@@ -67,7 +82,7 @@ pub fn get_variant_list_properties(
     )
 }
 
-pub fn get_type_properties(defs: &[IdlTypeDefinition], ty: &IdlType) -> FieldListProperties {
+pub fn get_type_properties(defs: &[IdlTypeDef], ty: &IdlType) -> FieldListProperties {
     match ty {
         IdlType::Bool
         | IdlType::U8
@@ -82,7 +97,7 @@ pub fn get_type_properties(defs: &[IdlTypeDefinition], ty: &IdlType) -> FieldLis
         | IdlType::F64
         | IdlType::U128
         | IdlType::I128
-        | IdlType::PublicKey => FieldListProperties {
+        | IdlType::Pubkey => FieldListProperties {
             can_copy: true,
             can_derive_default: true,
         },
@@ -94,26 +109,36 @@ pub fn get_type_properties(defs: &[IdlTypeDefinition], ty: &IdlType) -> FieldLis
             can_copy: false,
             can_derive_default: true,
         },
-        IdlType::Defined(inner) => {
-            let def = defs.iter().find(|def| def.name == *inner).unwrap();
+        IdlType::Defined { name, ..} => {
+            let def = defs.iter().find(|def| def.name == *name).unwrap();
             match &def.ty {
-                anchor_syn::idl::IdlTypeDefinitionTy::Struct { fields } => {
-                    get_field_list_properties(defs, fields)
+                IdlTypeDefTy::Struct { fields } => {
+                    get_defined_fields_list_properties(defs, fields)
                 }
-                anchor_syn::idl::IdlTypeDefinitionTy::Enum { variants } => {
+                IdlTypeDefTy::Enum { variants } => {
                     get_variant_list_properties(defs, variants)
+                }
+                IdlTypeDefTy::Type { .. } => {
+                    todo!();
                 }
             }
         }
         IdlType::Option(inner) => get_type_properties(defs, inner),
         IdlType::Array(inner, len) => {
             let inner = get_type_properties(defs, inner);
-            let can_derive_array_len = *len <= 32;
+            let can_derive_array_len = match len {
+                IdlArrayLen::Generic(_) => false,
+                IdlArrayLen::Value(len) => *len <= 32,
+            };
             FieldListProperties {
                 can_copy: inner.can_copy,
                 can_derive_default: can_derive_array_len && inner.can_derive_default,
             }
         }
+        IdlType::U256 => todo!(),
+        IdlType::I256 => todo!(),
+        IdlType::Generic(_) => todo!(),
+        _ => todo!(),
     }
 }
 
@@ -134,7 +159,7 @@ pub fn generate_fields(fields: &[IdlField]) -> TokenStream {
 
 /// Generates a struct.
 pub fn generate_struct(
-    defs: &[IdlTypeDefinition],
+    defs: &[IdlTypeDef],
     struct_name: &Ident,
     fields: &[IdlField],
     opts: StructOpts,
@@ -142,7 +167,7 @@ pub fn generate_struct(
     let fields_rendered = generate_fields(fields);
     let props = get_field_list_properties(defs, fields);
 
-    let derive_default = if props.can_derive_default {
+    let derive_default = if props.can_derive_default && false {
         quote! {
             #[derive(Default)]
         }
@@ -189,11 +214,41 @@ pub fn generate_struct(
 
 /// Generates an enum.
 pub fn generate_enum(
-    defs: &[IdlTypeDefinition],
+    defs: &[IdlTypeDef],
     enum_name: &Ident,
     variants: &[IdlEnumVariant],
 ) -> TokenStream {
-    let variant_idents = variants.iter().map(|v| format_ident!("{}", v.name));
+    let variant_idents = variants.iter().map(|v| {
+        match &v.fields {
+            None => {
+                // Variant with no fields
+                let variant_name = format_ident!("{}", v.name);
+                quote! { #variant_name }
+            }
+            Some(IdlDefinedFields::Tuple(types)) => {
+                // Variant with tuple fields (unnamed fields)
+                let variant_name = format_ident!("{}", v.name);
+                let field_types: Vec<TokenStream> = types
+                    .iter()
+                    .map(|ty| crate::ty_to_rust_type(&ty).parse().unwrap())
+                    .collect();
+                quote! { #variant_name(#(#field_types),*) }
+            }
+            Some(IdlDefinedFields::Named(fields)) => {
+                // Variant with named fields
+                let variant_name = format_ident!("{}", v.name);
+                let field_defs: Vec<_> = fields
+                    .iter()
+                    .map(|field| {
+                        let field_name = format_ident!("{}", field.name);
+                        let field_type: TokenStream = crate::ty_to_rust_type(&field.ty).parse().unwrap();
+                        quote! { #field_name: #field_type }
+                    })
+                    .collect();
+                quote! { #variant_name { #(#field_defs),* } }
+            }
+        }
+    }).collect::<Vec<_>>();
     let props = get_variant_list_properties(defs, variants);
 
     let derive_copy = if props.can_copy {
@@ -204,7 +259,7 @@ pub fn generate_enum(
         quote! {}
     };
 
-    let default_variant = format_ident!("{}", variants.first().unwrap().name);
+    // let default_variant = format_ident!("{}", variants.first().unwrap().name);
 
     quote! {
         #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
@@ -213,29 +268,38 @@ pub fn generate_enum(
             #(#variant_idents),*
         }
 
-        impl Default for #enum_name {
-            fn default() -> Self {
-                Self::#default_variant
-            }
-        }
+        // impl Default for #enum_name {
+        //     fn default() -> Self {
+        //         Self::#default_variant::default()
+        //     }
+        // }
     }
 }
 
 /// Generates structs and enums.
 pub fn generate_typedefs(
-    typedefs: &[IdlTypeDefinition],
+    typedefs: &[IdlTypeDef],
     struct_opts: &BTreeMap<String, StructOpts>,
 ) -> TokenStream {
     let defined = typedefs.iter().map(|def| {
         let struct_name = format_ident!("{}", def.name);
         match &def.ty {
-            anchor_syn::idl::IdlTypeDefinitionTy::Struct { fields } => {
+            IdlTypeDefTy::Struct { fields } => {
                 let opts = struct_opts.get(&def.name).copied().unwrap_or_default();
-                generate_struct(typedefs, &struct_name, fields, opts)
+                let fields = fields.iter().flat_map(|f| {
+                    match f {
+                        IdlDefinedFields::Named(ff) => {
+                            ff.clone()
+                        }
+                        _ => todo!(),
+                    }
+                }).collect::<Vec<_>>();
+                generate_struct(typedefs, &struct_name, &*fields, opts)
             }
-            anchor_syn::idl::IdlTypeDefinitionTy::Enum { variants } => {
+            IdlTypeDefTy::Enum { variants } => {
                 generate_enum(typedefs, &struct_name, variants)
             }
+            IdlTypeDefTy::Type { .. } => todo!()
         }
     });
     quote! {
